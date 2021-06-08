@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/bww/go-queue"
+	"github.com/bww/go-queue/config"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/bww/go-gcputil/auth"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
 
@@ -153,12 +155,18 @@ func subscrConfig(topic *pubsub.Topic) pubsub.SubscriptionConfig {
 }
 
 type backend struct {
+	config.Config
 	client *pubsub.Client
 	topic  *pubsub.Topic
+	log    *logrus.Entry
 	create bool // create topics and subscriptions if they don't exist
 }
 
-func New(dsn string) (*backend, error) {
+func New(dsn string, opts ...config.Option) (*backend, error) {
+	return NewWithConfig(dsn, config.Config{}.WithOptions(opts...))
+}
+
+func NewWithConfig(dsn string, conf config.Config) (*backend, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, err
@@ -182,10 +190,14 @@ func New(dsn string) (*backend, error) {
 		return nil, err
 	}
 
-	tname := u.Host
-	topic := client.Topic(tname)
 	query := u.Query()
 	create := strings.ToLower(query.Get("create")) == "true"
+
+	tname := u.Host
+	topic := client.Topic(tname)
+	if n := conf.Backlog; n > 0 {
+		topic.PublishSettings.CountThreshold = n
+	}
 
 	exists, err := topic.Exists(context.Background())
 	if err != nil {
@@ -202,9 +214,11 @@ func New(dsn string) (*backend, error) {
 	}
 
 	return &backend{
-		client,
-		topic,
-		create,
+		Config: conf,
+		client: client,
+		topic:  topic,
+		log:    logrus.WithFields(logrus.Fields{"queue": "pubsub", "topic": tname}),
+		create: create,
 	}, nil
 }
 
@@ -239,10 +253,19 @@ func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
 }
 
 func (b *backend) Publish(message *queue.Message) error {
-	b.topic.Publish(context.Background(), &pubsub.Message{
+	res := b.topic.Publish(context.Background(), &pubsub.Message{
 		Data:        message.Data,
 		Attributes:  message.Attributes,
 		PublishTime: time.Now(),
 	})
+	if b.Synchronous {
+		id, err := res.Get(context.Background())
+		if err != nil {
+			return err
+		}
+		if b.Debug {
+			b.log.Println("Published message:", id)
+		}
+	}
 	return nil
 }

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	testDSN = "pubsub://pynt-local-tasks?create=true"
-	testSub = "pubsub://pynt-local-tasks-default"
+	testDSN = "pubsub://queue-pubsub-backend?create=true"
+	testSub = "pubsub://queue-pubsub-backend-default"
 )
 
 func TestPubSub(t *testing.T) {
