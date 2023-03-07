@@ -11,9 +11,8 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
-	golang.org/x/net v0.0.0-20220225172249-27dd8689420f // indirect
+	golang.org/x/net v0.7.0 // indirect
 	golang.org/x/oauth2 v0.0.0-20220223155221-ee480838109b // indirect
-	golang.org/x/sys v0.0.0-20220227234510-4e6760a101f9 // indirect
 	google.golang.org/api v0.70.0
 	google.golang.org/genproto v0.0.0-20220303160752-862486edd9cc // indirect
 )
