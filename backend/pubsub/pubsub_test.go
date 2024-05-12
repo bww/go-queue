@@ -2,6 +2,8 @@ package pubsub
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ const (
 )
 
 func TestPubSub(t *testing.T) {
+	logh := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(logh))
+
 	count := 100
 	tests := make([]*queue.Message, 0, count)
 	for i := 0; i < count; i++ {

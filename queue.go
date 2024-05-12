@@ -35,4 +35,5 @@ type Consumer interface {
 type Queue interface {
 	Publish(*Message) error
 	Consumer(name string) (Consumer, error)
+	Close() error
 }

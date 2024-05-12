@@ -59,3 +59,7 @@ func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
 func (b *backend) Publish(task *queue.Message) error {
 	return nil
 }
+
+func (b *backend) Close() error {
+	return nil
+}

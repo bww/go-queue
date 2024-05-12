@@ -3,10 +3,10 @@ package pubsub
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bww/go-queue"
@@ -14,139 +14,12 @@ import (
 
 	"cloud.google.com/go/pubsub"
 	"github.com/bww/go-gcputil/auth"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
 
 const Scheme = "pubsub"
 
 const defaultBacklog = 20
-
-type delivery struct {
-	message *queue.Message
-	origin  *pubsub.Message
-}
-
-func (d *delivery) Message() *queue.Message {
-	return d.message
-}
-
-func (d *delivery) Ack() {
-	d.origin.Ack()
-}
-
-func (d *delivery) Nack() {
-	d.origin.Nack()
-}
-
-type consumer struct {
-	sync.Mutex
-	subscr   *pubsub.Subscription
-	cancel   context.CancelFunc
-	delivery chan *delivery
-	err      error
-}
-
-func newConsumer(sub *pubsub.Subscription) *consumer {
-	return &consumer{
-		subscr:   sub,
-		delivery: make(chan *delivery, defaultBacklog),
-	}
-}
-
-func (c *consumer) start() error {
-	c.Lock()
-	defer c.Unlock()
-	if c.cancel != nil {
-		return queue.ErrStarted
-	}
-	var cxt context.Context
-	cxt, c.cancel = context.WithCancel(context.Background())
-	go func() {
-		err := c.subscr.Receive(cxt, c.receive)
-		c.Lock()
-		if err == context.Canceled {
-			c.err = queue.ErrClosed
-		} else {
-			c.err = err
-		}
-		c.cancel = nil
-		close(c.delivery)
-		c.Unlock()
-	}()
-	return nil
-}
-
-func (c *consumer) Close() error {
-	c.Lock()
-	defer c.Unlock()
-	if c.cancel == nil {
-		return queue.ErrClosed
-	}
-	c.cancel()
-	c.cancel = nil
-	return nil
-}
-
-func (c *consumer) receive(cxt context.Context, origin *pubsub.Message) {
-	var attrs queue.Attributes
-	if origin.Attributes != nil {
-		attrs = origin.Attributes
-	} else {
-		attrs = make(queue.Attributes)
-	}
-	message := &queue.Message{
-		Attributes: attrs,
-		Data:       origin.Data,
-	}
-	elem := &delivery{
-		message: message,
-		origin:  origin,
-	}
-	select {
-	case <-cxt.Done():
-		return // we're cancelled
-	default:
-		c.delivery <- elem
-	}
-}
-
-func (c *consumer) checkerr() error {
-	c.Lock()
-	err := c.err
-	c.Unlock()
-	return err
-}
-
-func (c *consumer) Receive() (queue.Delivery, error) {
-	err := c.checkerr()
-	if err != nil {
-		return nil, err
-	}
-	task, ok := <-c.delivery
-	if ok {
-		return task, nil
-	} else {
-		return nil, queue.ErrClosed
-	}
-}
-
-func (c *consumer) ReceiveWithTimeout(timeout time.Duration) (queue.Delivery, error) {
-	err := c.checkerr()
-	if err != nil {
-		return nil, err
-	}
-	select {
-	case <-time.After(timeout):
-		return nil, queue.ErrTimeout
-	case task, ok := <-c.delivery:
-		if ok {
-			return task, nil
-		} else {
-			return nil, queue.ErrClosed
-		}
-	}
-}
 
 func subscrConfig(topic *pubsub.Topic) pubsub.SubscriptionConfig {
 	return pubsub.SubscriptionConfig{
@@ -155,13 +28,26 @@ func subscrConfig(topic *pubsub.Topic) pubsub.SubscriptionConfig {
 	}
 }
 
+type outbound struct {
+	Res *pubsub.PublishResult
+	Pub time.Time
+}
+
+func newOutbound(res *pubsub.PublishResult, pub time.Time) outbound {
+	return outbound{
+		Res: res,
+		Pub: pub,
+	}
+}
+
 type backend struct {
 	config.Config
 	cxt    context.Context
+	closer context.CancelFunc
 	client *pubsub.Client
 	topic  *pubsub.Topic
-	log    *logrus.Entry
-	outbox chan *pubsub.PublishResult
+	log    *slog.Logger
+	outbox chan outbound
 	create bool // create topics and subscriptions if they don't exist
 }
 
@@ -220,28 +106,34 @@ func NewWithContext(cxt context.Context, dsn string, conf config.Config) (*backe
 		}
 	}
 
-	var outbox chan *pubsub.PublishResult
-	if !conf.Synchronous {
-		outbox = make(chan *pubsub.PublishResult, 1024)
+	log := slog.Default().With("name", "pubsub", "topic", tname)
+	var outbox chan outbound
+	if conf.Synchronous {
+		log = log.With("mode", "sync")
+	} else {
+		log = log.With("mode", "async")
+		outbox = make(chan outbound, defaultBacklog)
 	}
+
 	if cxt == nil {
 		cxt = context.Background()
 	}
+	cxt, closer := context.WithCancel(cxt)
 
 	b := &backend{
 		Config: conf,
 		cxt:    cxt,
+		closer: closer,
 		client: client,
 		topic:  topic,
-		log:    logrus.WithFields(logrus.Fields{"queue": "pubsub", "topic": tname}),
+		log:    log,
 		outbox: outbox,
 		create: create,
 	}
 
 	if outbox != nil {
-		go notify(cxt, outbox, b.log, conf)
+		go notify(cxt, outbox, log, conf)
 	}
-	fmt.Println(">>>>>>>>>>>>>>>>>>>>>>>>>>> ARE YOU EVEN FUCKING HERE?")
 	return b, nil
 }
 
@@ -266,7 +158,7 @@ func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
 		}
 		sub, err = b.client.CreateSubscription(context.Background(), name, subscrConfig(b.topic))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Could not create subscription: %w", err)
 		}
 	}
 
@@ -276,10 +168,11 @@ func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
 }
 
 func (b *backend) Publish(message *queue.Message) error {
+	now := time.Now()
 	psm := &pubsub.Message{
 		Data:        message.Data,
 		Attributes:  message.Attributes,
-		PublishTime: time.Now(),
+		PublishTime: now,
 	}
 	res := b.topic.Publish(context.Background(), psm)
 	// in syncrhonous mode, we wait on this routine for a response from the
@@ -288,44 +181,45 @@ func (b *backend) Publish(message *queue.Message) error {
 	if b.Synchronous {
 		id, err := res.Get(context.Background())
 		if err != nil {
-			return err
+			return fmt.Errorf("Could not publish message: %w", err)
 		}
-		if b.Debug {
-			b.log.Println("Published message:", id)
-		}
+		b.log.Debug("Published message", "id", id)
 	} else {
-		b.monitor(res)
+		b.monitor(newOutbound(res, now))
 	}
 	return nil
 }
 
-func (b *backend) monitor(res *pubsub.PublishResult) {
+func (b *backend) Close() error {
+	b.closer()
+	return nil
+}
+
+func (b *backend) monitor(res outbound) {
 	if b.outbox != nil { // outbox is immutable after creation
 		b.outbox <- res
 	}
 }
 
-func notify(cxt context.Context, resv <-chan *pubsub.PublishResult, log *logrus.Entry, conf config.Config) {
-	if conf.Debug {
-		log.Println("Starting outbox monitor...")
-		defer log.Println("Outbox monitor is shutting down...")
-	}
+func notify(cxt context.Context, resv <-chan outbound, log *slog.Logger, conf config.Config) {
+	log.Debug("Starting outbox monitor...")
+	defer log.Debug("Outbox monitor is shutting down...")
 	for {
-		var res *pubsub.PublishResult
+		var out outbound
 		var ok bool
 		select {
 		case <-cxt.Done():
 			break // context canceled,we're done
-		case res, ok = <-resv:
+		case out, ok = <-resv:
 			if !ok {
 				break // channel closed; we're done
 			}
 		}
-		id, err := res.Get(context.Background())
+		id, err := out.Res.Get(context.Background())
 		if err != nil {
-			log.Errorf("Could not publish message: %v", err)
-		} else if conf.Debug {
-			log.Println("Published message:", id)
+			log.With("cause", err).Error("Could not publish message")
+		} else {
+			log.With("id", id, "delay", time.Since(out.Pub)).Debug("Published message")
 		}
 	}
 }
