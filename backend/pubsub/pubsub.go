@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -156,9 +157,11 @@ func subscrConfig(topic *pubsub.Topic) pubsub.SubscriptionConfig {
 
 type backend struct {
 	config.Config
+	cxt    context.Context
 	client *pubsub.Client
 	topic  *pubsub.Topic
 	log    *logrus.Entry
+	outbox chan *pubsub.PublishResult
 	create bool // create topics and subscriptions if they don't exist
 }
 
@@ -167,6 +170,10 @@ func New(dsn string, opts ...config.Option) (*backend, error) {
 }
 
 func NewWithConfig(dsn string, conf config.Config) (*backend, error) {
+	return NewWithContext(context.Background(), dsn, conf)
+}
+
+func NewWithContext(cxt context.Context, dsn string, conf config.Config) (*backend, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, err
@@ -175,12 +182,12 @@ func NewWithConfig(dsn string, conf config.Config) (*backend, error) {
 	var projectId string
 	var opts []option.ClientOption
 	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
-		creds, cxt, err := auth.Credentials(dsn, pubsub.ScopePubSub)
+		creds, pcxt, err := auth.Credentials(dsn, pubsub.ScopePubSub)
 		if err != nil {
 			return nil, err
 		}
 		opts = append(opts, option.WithCredentials(creds))
-		projectId = cxt.ProjectId
+		projectId = pcxt.ProjectId
 	} else {
 		projectId = os.Getenv("PUBSUB_PROJECT_ID")
 	}
@@ -213,13 +220,29 @@ func NewWithConfig(dsn string, conf config.Config) (*backend, error) {
 		}
 	}
 
-	return &backend{
+	var outbox chan *pubsub.PublishResult
+	if !conf.Synchronous {
+		outbox = make(chan *pubsub.PublishResult, 1024)
+	}
+	if cxt == nil {
+		cxt = context.Background()
+	}
+
+	b := &backend{
 		Config: conf,
+		cxt:    cxt,
 		client: client,
 		topic:  topic,
 		log:    logrus.WithFields(logrus.Fields{"queue": "pubsub", "topic": tname}),
+		outbox: outbox,
 		create: create,
-	}, nil
+	}
+
+	if outbox != nil {
+		go notify(cxt, outbox, b.log, conf)
+	}
+	fmt.Println(">>>>>>>>>>>>>>>>>>>>>>>>>>> ARE YOU EVEN FUCKING HERE?")
+	return b, nil
 }
 
 func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
@@ -253,11 +276,15 @@ func (b *backend) Consumer(dsn string) (queue.Consumer, error) {
 }
 
 func (b *backend) Publish(message *queue.Message) error {
-	res := b.topic.Publish(context.Background(), &pubsub.Message{
+	psm := &pubsub.Message{
 		Data:        message.Data,
 		Attributes:  message.Attributes,
 		PublishTime: time.Now(),
-	})
+	}
+	res := b.topic.Publish(context.Background(), psm)
+	// in syncrhonous mode, we wait on this routine for a response from the
+	// service and return it; otherwise, we enqueue the message and wait for a
+	// response on another routine to avoid blocking.
 	if b.Synchronous {
 		id, err := res.Get(context.Background())
 		if err != nil {
@@ -266,6 +293,39 @@ func (b *backend) Publish(message *queue.Message) error {
 		if b.Debug {
 			b.log.Println("Published message:", id)
 		}
+	} else {
+		b.monitor(res)
 	}
 	return nil
+}
+
+func (b *backend) monitor(res *pubsub.PublishResult) {
+	if b.outbox != nil { // outbox is immutable after creation
+		b.outbox <- res
+	}
+}
+
+func notify(cxt context.Context, resv <-chan *pubsub.PublishResult, log *logrus.Entry, conf config.Config) {
+	if conf.Debug {
+		log.Println("Starting outbox monitor...")
+		defer log.Println("Outbox monitor is shutting down...")
+	}
+	for {
+		var res *pubsub.PublishResult
+		var ok bool
+		select {
+		case <-cxt.Done():
+			break // context canceled,we're done
+		case res, ok = <-resv:
+			if !ok {
+				break // channel closed; we're done
+			}
+		}
+		id, err := res.Get(context.Background())
+		if err != nil {
+			log.Errorf("Could not publish message: %v", err)
+		} else if conf.Debug {
+			log.Println("Published message:", id)
+		}
+	}
 }

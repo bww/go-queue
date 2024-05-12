@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bww/go-queue"
+	"github.com/bww/go-queue/config"
 
 	"github.com/bww/go-util/v1/uuid"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +30,7 @@ func TestPubSub(t *testing.T) {
 		})
 	}
 
-	q, err := New(testDSN)
+	q, err := New(testDSN, config.Debug(true))
 	if !assert.Nil(t, err, fmt.Sprint(err)) {
 		return
 	}
