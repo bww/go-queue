@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bww/go-queue"
-	"github.com/bww/go-queue/config"
+	"github.com/bww/v1/go-queue"
+	"github.com/bww/v1/go-queue/config"
 
 	"github.com/bww/go-util/v1/uuid"
 	"github.com/stretchr/testify/assert"
