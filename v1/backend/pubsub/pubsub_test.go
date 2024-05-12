@@ -2,10 +2,13 @@ package pubsub
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
-	"github.com/bww/go-queue"
+	"github.com/bww/go-queue/v1"
+	"github.com/bww/go-queue/v1/config"
 
 	"github.com/bww/go-util/v1/uuid"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +20,9 @@ const (
 )
 
 func TestPubSub(t *testing.T) {
+	logh := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(logh))
+
 	count := 100
 	tests := make([]*queue.Message, 0, count)
 	for i := 0; i < count; i++ {
@@ -29,7 +35,7 @@ func TestPubSub(t *testing.T) {
 		})
 	}
 
-	q, err := New(testDSN)
+	q, err := New(testDSN, config.Debug(true))
 	if !assert.Nil(t, err, fmt.Sprint(err)) {
 		return
 	}
