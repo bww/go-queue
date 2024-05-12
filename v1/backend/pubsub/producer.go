@@ -106,7 +106,7 @@ func NewWithContext(cxt context.Context, dsn string, conf config.Config) (*backe
 		}
 	}
 
-	log := slog.Default().With("name", "pubsub", "topic", tname)
+	log := slog.Default().With("queue", "pubsub", "topic", tname)
 	var outbox chan publishResult
 	if conf.Synchronous {
 		log = log.With("mode", "sync")
