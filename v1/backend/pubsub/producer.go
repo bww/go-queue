@@ -204,15 +204,16 @@ func (b *backend) monitor(res publishResult) {
 func notify(cxt context.Context, resv <-chan publishResult, log *slog.Logger, conf config.Config) {
 	log.Debug("Starting outbox monitor...")
 	defer log.Debug("Outbox monitor is shutting down...")
+outer:
 	for {
 		var out publishResult
 		var ok bool
 		select {
 		case <-cxt.Done():
-			break // context canceled,we're done
+			break outer // context canceled,we're done
 		case out, ok = <-resv:
 			if !ok {
-				break // channel closed; we're done
+				break outer // channel closed; we're done
 			}
 		}
 		id, err := out.Res.Get(context.Background())
