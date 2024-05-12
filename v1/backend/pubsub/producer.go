@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bww/v1/go-queue"
-	"github.com/bww/v1/go-queue/config"
+	"github.com/bww/go-queue/v1"
+	"github.com/bww/go-queue/v1/config"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/bww/go-gcputil/auth"

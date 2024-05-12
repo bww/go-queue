@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bww/v1/go-queue"
+	"github.com/bww/go-queue/v1"
 
 	"cloud.google.com/go/pubsub"
 )

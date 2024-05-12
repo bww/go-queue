@@ -3,7 +3,7 @@ package blackhole
 import (
 	"time"
 
-	"github.com/bww/v1/go-queue"
+	"github.com/bww/go-queue/v1"
 )
 
 const Scheme = "blackhole"

@@ -5,10 +5,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bww/v1/go-queue"
-	"github.com/bww/v1/go-queue/backend/blackhole"
-	"github.com/bww/v1/go-queue/backend/pubsub"
-	"github.com/bww/v1/go-queue/config"
+	"github.com/bww/go-queue/v1"
+	"github.com/bww/go-queue/v1/backend/blackhole"
+	"github.com/bww/go-queue/v1/backend/pubsub"
+	"github.com/bww/go-queue/v1/config"
 )
 
 func New(dsn string, opts ...config.Option) (queue.Queue, error) {
