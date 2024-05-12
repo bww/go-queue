@@ -28,13 +28,13 @@ func subscrConfig(topic *pubsub.Topic) pubsub.SubscriptionConfig {
 	}
 }
 
-type outbound struct {
+type publishResult struct {
 	Res *pubsub.PublishResult
 	Pub time.Time
 }
 
-func newOutbound(res *pubsub.PublishResult, pub time.Time) outbound {
-	return outbound{
+func newPublishResult(res *pubsub.PublishResult, pub time.Time) publishResult {
+	return publishResult{
 		Res: res,
 		Pub: pub,
 	}
@@ -47,7 +47,7 @@ type backend struct {
 	client *pubsub.Client
 	topic  *pubsub.Topic
 	log    *slog.Logger
-	outbox chan outbound
+	outbox chan publishResult
 	create bool // create topics and subscriptions if they don't exist
 }
 
@@ -107,12 +107,12 @@ func NewWithContext(cxt context.Context, dsn string, conf config.Config) (*backe
 	}
 
 	log := slog.Default().With("name", "pubsub", "topic", tname)
-	var outbox chan outbound
+	var outbox chan publishResult
 	if conf.Synchronous {
 		log = log.With("mode", "sync")
 	} else {
 		log = log.With("mode", "async")
-		outbox = make(chan outbound, defaultBacklog)
+		outbox = make(chan publishResult, defaultBacklog)
 	}
 
 	if cxt == nil {
@@ -185,7 +185,7 @@ func (b *backend) Publish(message *queue.Message) error {
 		}
 		b.log.Debug("Published message", "id", id)
 	} else {
-		b.monitor(newOutbound(res, now))
+		b.monitor(newPublishResult(res, now))
 	}
 	return nil
 }
@@ -195,17 +195,17 @@ func (b *backend) Close() error {
 	return nil
 }
 
-func (b *backend) monitor(res outbound) {
+func (b *backend) monitor(res publishResult) {
 	if b.outbox != nil { // outbox is immutable after creation
 		b.outbox <- res
 	}
 }
 
-func notify(cxt context.Context, resv <-chan outbound, log *slog.Logger, conf config.Config) {
+func notify(cxt context.Context, resv <-chan publishResult, log *slog.Logger, conf config.Config) {
 	log.Debug("Starting outbox monitor...")
 	defer log.Debug("Outbox monitor is shutting down...")
 	for {
-		var out outbound
+		var out publishResult
 		var ok bool
 		select {
 		case <-cxt.Done():
